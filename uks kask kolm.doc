@@ -1,10 +1,14 @@
-Eesmärk: Teha trips traps trull 
+Eesmärk: Teha trips traps trull, single binary
+Kest: TTT grid, input output, basic GUI, W-L condition,
 Plaanid:
 1. Lisada sound effectid. 
 2. Lisada shop koos skinnidega.
 3. Lisada 5% võimalus saada jumpscare.
 4. Lisada raha süsteem.
-Github codespace:
-https://prod.liveshare.vsengsaas.visualstudio.com/join?E7BBB9FD0B6F994DA269F897B4B2E6C6A81F 
-
-
+5. Lisada slot machine.
+6. Lisada subway surfer ja mc parkour.
+7. Lisada always focused.
+8. Lisada option menu.
+9. Lisada difficulty.
+10. Lisada docker web container.
+11. 

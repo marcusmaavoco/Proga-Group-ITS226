@@ -130,6 +130,8 @@ class SoundPlayer:
 
     def _make_file(self, kind, volume):
         path = os.path.join(self.dir, f"{kind}_{int(volume * 100)}.wav")
+        if kind.startswith("squish"):
+            return self._make_squish(path, int(kind[6:] or 0), volume)
         frames = bytearray()
         for freq, ms in SOUNDS[kind]:
             n = int(self.RATE * ms / 1000)
@@ -138,6 +140,31 @@ class SoundPlayer:
                 env = (1 - i / n) ** 1.3 * min(1.0, i / fade_in)
                 val = math.sin(2 * math.pi * freq * i / self.RATE) if freq else 0
                 frames += struct.pack("<h", int(val * env * volume * 0.7 * 32767))
+        with wave.open(path, "wb") as wf:
+            wf.setnchannels(1)
+            wf.setsampwidth(2)
+            wf.setframerate(self.RATE)
+            wf.writeframes(bytes(frames))
+        return path
+
+    def _make_squish(self, path, variant, volume):
+        """Soft, wet 'squish' (falling sine + filtered noise), no assets."""
+        rnd = random.Random(variant * 17 + 3)
+        n = int(self.RATE * 0.26)
+        frames = bytearray()
+        phase = 0.0
+        noise = 0.0
+        f0 = 300 + 70 * variant
+        fade_in = max(1, int(self.RATE * 0.004))
+        for i in range(n):
+            t = i / n
+            phase += 2 * math.pi * f0 * (0.3 ** t) / self.RATE
+            noise = noise * 0.85 + rnd.uniform(-1, 1) * 0.15
+            bubble = 0.6 + 0.4 * math.sin(2 * math.pi * 6 * t)
+            env = (1 - t) ** 1.6 * min(1.0, i / fade_in)
+            val = 0.7 * math.sin(phase) * bubble + 1.2 * noise
+            val = max(-1.0, min(1.0, val)) * env * volume * 0.8
+            frames += struct.pack("<h", int(val * 32767))
         with wave.open(path, "wb") as wf:
             wf.setnchannels(1)
             wf.setsampwidth(2)
@@ -166,6 +193,411 @@ class SoundPlayer:
                     subprocess.Popen(args, stderr=subprocess.DEVNULL)
         except Exception:
             pass  # sound is optional; never break the game
+
+
+# ---------------------------------------------------------------- side panels
+class RunnerPanel(tk.Canvas):
+    """Endless-runner style animation (3 lanes, perspective, autopilot)."""
+
+    SKY = ["#1e1b4b", "#312e81", "#4c1d95", "#7e22ce", "#c026d3", "#f97316", "#fbbf24"]
+    TRAINS = ["#2563eb", "#dc2626", "#16a34a", "#9333ea", "#0891b2"]
+    BUILD = ["#1f2937", "#111827", "#27304a", "#1e293b"]
+    NB = 10   # buildings per side
+
+    def __init__(self, parent, **kw):
+        super().__init__(parent, bg=BG, highlightthickness=0, **kw)
+        self.running = False
+        self.after_id = None
+        self.rng = random.Random(7)
+        self.t = 0.0
+        self.things = []         # trains, barriers, coins: {"kind","lane","s"}
+        self.lane = 1.0          # smooth lane position 0..2
+        self.target = 1
+        self.jump = -1.0         # <0: on the ground, else 0..1 jump phase
+        self.coins = 0
+        self.cool = 0
+        self.buildings = [(self.rng.choice(self.BUILD), self.rng.uniform(0.6, 1.4),
+                           self.rng.uniform(0.5, 1.2)) for _ in range(2 * self.NB)]
+
+    # ---- loop ----
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.tick()
+
+    def stop(self):
+        self.running = False
+        if self.after_id is not None:
+            self.after_cancel(self.after_id)
+            self.after_id = None
+
+    def tick(self):
+        self.after_id = None
+        if not self.running:
+            return
+        self.step()
+        self.render()
+        self.after_id = self.after(33, self.tick)
+
+    # ---- simulation ----
+    def blocked(self, lane, lo, hi):
+        return any(t["kind"] in ("train", "barrier") and t["lane"] == lane
+                   and lo < t["s"] < hi for t in self.things)
+
+    def step(self):
+        self.t += 0.22
+        for th in self.things:
+            th["s"] = th["s"] * 1.032 + 0.0025
+        self.things = [th for th in self.things if th["s"] < 1.15]
+
+        # spawn
+        self.cool -= 1
+        if self.cool <= 0:
+            self.cool = self.rng.randint(14, 30)
+            lane = self.rng.randint(0, 2)
+            kind = self.rng.choice(["train", "train", "barrier", "coins", "coins"])
+            if kind == "coins":
+                for i in range(5):
+                    self.things.append({"kind": "coin", "lane": lane,
+                                        "s": 0.02 / (1.12 ** i)})
+            else:
+                self.things.append({"kind": kind, "lane": lane, "s": 0.02,
+                                    "color": self.rng.choice(self.TRAINS)})
+
+        # autopilot
+        danger = None
+        for th in self.things:
+            if (th["kind"] in ("train", "barrier") and th["lane"] == self.target
+                    and 0.45 < th["s"] < 0.9):
+                danger = th
+                break
+        if danger:
+            if danger["kind"] == "barrier":
+                if self.jump < 0 and danger["s"] > 0.62:
+                    self.jump = 0.0
+            else:
+                free = [l for l in range(3) if not self.blocked(l, 0.35, 0.95)]
+                if free:
+                    self.target = min(free, key=lambda l: abs(l - self.target))
+        elif self.rng.random() < 0.01:
+            self.target = self.rng.randint(0, 2)
+        self.lane += (self.target - self.lane) * 0.22
+        if self.jump >= 0:
+            self.jump += 0.07
+            if self.jump >= 1:
+                self.jump = -1.0
+
+        # collect coins
+        for th in list(self.things):
+            if (th["kind"] == "coin" and 0.82 < th["s"] < 0.98
+                    and abs(th["lane"] - self.lane) < 0.5):
+                self.things.remove(th)
+                self.coins += 1
+
+    # ---- drawing ----
+    def render(self):
+        w, h = self.winfo_width(), self.winfo_height()
+        if w < 20 or h < 20:
+            return
+        self.delete("all")
+        y0 = h * 0.30
+        cx = w / 2
+        tw = w * 0.42
+
+        bands = len(self.SKY)
+        for i, col in enumerate(self.SKY):
+            self.create_rectangle(0, y0 * i / bands, w, y0 * (i + 1) / bands + 1,
+                                  fill=col, outline="")
+        self.create_rectangle(0, y0, w, h, fill="#111827", outline="")
+        self.create_polygon(cx - tw * 0.02, y0, cx + tw * 0.02, y0,
+                            cx + tw, h, cx - tw, h, fill="#374151", outline="")
+        for sgn in (-1, 1):
+            self.create_line(cx + sgn * tw * 0.02, y0, cx + sgn * tw, h,
+                             fill="#f59e0b", width=3)
+            self.create_line(cx + sgn * tw * 0.02 / 3, y0, cx + sgn * tw / 3, h,
+                             fill="#6b7280", width=2, dash=(6, 6))
+
+        drawables = []
+        for j in range(14):
+            f = ((j + self.t * 0.5) % 14) / 14
+            drawables.append((f ** 2.4, "sleeper", None))
+        for k in range(self.NB):
+            f = ((k + self.t * 0.25) % self.NB) / self.NB
+            drawables.append((f ** 2.4, "bldg", (-1, k)))
+            drawables.append((f ** 2.4, "bldg", (1, k)))
+        for th in self.things:
+            drawables.append((th["s"], th["kind"], th))
+        drawables.append((0.9, "player", None))
+        drawables.sort(key=lambda d: d[0])
+
+        for s, kind, data in drawables:
+            if s < 0.02:
+                continue
+            g = y0 + (h - y0) * s
+            if kind == "sleeper":
+                half = tw * s
+                self.create_line(cx - half, g, cx + half, g, fill="#4b5563",
+                                 width=max(1, int(5 * s)))
+            elif kind == "bldg":
+                self.draw_building(cx, tw, w, h, g, s, data)
+            elif kind == "coin":
+                x = cx + (data["lane"] - 1) * (2 / 3) * tw * s
+                r = max(2, tw * 0.07 * s)
+                yy = g - tw * 0.1 * s
+                self.create_oval(x - r, yy - r, x + r, yy + r, fill="#fbbf24",
+                                 outline="#b45309", width=max(1, int(2 * s)))
+            elif kind == "train":
+                x = cx + (data["lane"] - 1) * (2 / 3) * tw * s
+                bw, bh = tw * 0.27 * s, h * 0.32 * s
+                col = data["color"]
+                self.create_rectangle(x - bw, g - bh, x + bw, g, fill=col,
+                                      outline="#0b1220", width=max(1, int(2 * s)))
+                self.create_rectangle(x - bw, g - bh, x + bw, g - bh * 0.88,
+                                      fill=lighten(col, 0.3), outline="")
+                for wx in (-0.62, 0.12):
+                    self.create_rectangle(x + bw * wx, g - bh * 0.78,
+                                          x + bw * (wx + 0.5), g - bh * 0.45,
+                                          fill="#0f172a", outline="")
+                self.create_rectangle(x - bw, g - bh * 0.18, x + bw, g - bh * 0.08,
+                                      fill="#fbbf24", outline="")
+            elif kind == "barrier":
+                x = cx + (data["lane"] - 1) * (2 / 3) * tw * s
+                bw, bh = tw * 0.27 * s, h * 0.07 * s
+                for sx in (-0.8, 0.8):
+                    self.create_line(x + bw * sx, g - bh * 0.8, x + bw * sx, g,
+                                     fill="#9ca3af", width=max(2, int(4 * s)))
+                self.create_rectangle(x - bw, g - bh * 1.8, x + bw, g - bh * 0.8,
+                                      fill="#ef4444", outline="#7f1d1d",
+                                      width=max(1, int(2 * s)))
+                for i in range(4):
+                    sx0 = x - bw + bw * 0.5 * i + bw * 0.1
+                    self.create_rectangle(sx0, g - bh * 1.8, sx0 + bw * 0.18,
+                                          g - bh * 0.8, fill="#f8fafc", outline="")
+            elif kind == "player":
+                self.draw_player(cx, tw, h, g, s)
+
+        # HUD
+        self.create_text(12, 10, anchor="nw", text="SUBWAY RUN",
+                         font=(FONT, 12, "bold"), fill="#fde68a")
+        self.create_oval(w - 74, 13, w - 60, 27, fill="#fbbf24",
+                         outline="#b45309", width=2)
+        self.create_text(w - 54, 10, anchor="nw", text=str(self.coins),
+                         font=(FONT, 12, "bold"), fill="#fde68a")
+
+    def draw_building(self, cx, tw, w, h, g, s, data):
+        side, k = data
+        color, wf, hf = self.buildings[k + (0 if side < 0 else self.NB)]
+        edge = cx + side * tw * s * 1.25
+        bw, bh = w * 0.22 * s * wf, h * 0.55 * s * hf
+        x1, x2 = (edge - bw, edge) if side < 0 else (edge, edge + bw)
+        self.create_rectangle(x1, g - bh, x2, g, fill=color, outline="#0b1220")
+        if s > 0.15:
+            for row in range(1, 5):
+                for col in range(2):
+                    if (k + row + col) % 2 == 0:
+                        wx = x1 + bw * (0.18 + 0.4 * col)
+                        wy = g - bh + bh * (0.08 + 0.2 * row)
+                        self.create_rectangle(wx, wy, wx + bw * 0.22, wy + bh * 0.09,
+                                              fill="#fde68a", outline="")
+
+    def draw_player(self, cx, tw, h, g, s):
+        x = cx + (self.lane - 1) * (2 / 3) * tw * s
+        u = h * 0.017
+        jumping = self.jump >= 0
+        y = g - (math.sin(math.pi * self.jump) * u * 9 if jumping else 0)
+        swing = 0 if jumping else math.sin(self.t * 2.2)
+        lw = max(3, int(u * 1.6))
+        self.create_oval(x - u * 3, g - u * 0.8, x + u * 3, g + u * 0.8,
+                         fill="#0b1220", outline="")
+        self.create_rectangle(x - u * 2.4, y, x + u * 2.4, y + u * 0.8,
+                              fill="#f59e0b", outline="#b45309")      # board
+        self.create_line(x - u * 0.9, y - u * 5, x - u * 0.9 + swing * u * 1.2, y,
+                         fill="#1e3a8a", width=lw, capstyle=tk.ROUND)
+        self.create_line(x + u * 0.9, y - u * 5, x + u * 0.9 - swing * u * 1.2, y,
+                         fill="#1e3a8a", width=lw, capstyle=tk.ROUND)
+        self.create_line(x - u * 2.2, y - u * 10, x - u * 3.2, y - u * 6.5 + swing * u,
+                         fill="#ec4899", width=lw, capstyle=tk.ROUND)
+        self.create_line(x + u * 2.2, y - u * 10, x + u * 3.2, y - u * 6.5 - swing * u,
+                         fill="#ec4899", width=lw, capstyle=tk.ROUND)
+        self.create_rectangle(x - u * 2.2, y - u * 10.5, x + u * 2.2, y - u * 4.6,
+                              fill="#ec4899", outline="#9d174d", width=2)
+        self.create_oval(x - u * 1.7, y - u * 14, x + u * 1.7, y - u * 10.6,
+                         fill="#fcd9b6", outline="#b45309")
+        self.create_arc(x - u * 1.9, y - u * 15, x + u * 1.9, y - u * 11,
+                        start=0, extent=180, fill="#22c55e", outline="#166534")
+
+
+class SlimePanel(tk.Canvas):
+    """Squishy slime blob. Click / drag to squish (with sound), right-click recolors."""
+
+    N = 40
+    COLORS = [("#4ade80", "#166534"), ("#f472b6", "#9d174d"), ("#a78bfa", "#5b21b6"),
+              ("#38bdf8", "#075985"), ("#fb923c", "#9a3412")]
+
+    def __init__(self, parent, play_cb, **kw):
+        super().__init__(parent, bg="#150f2e", highlightthickness=0, **kw)
+        self.play_cb = play_cb
+        self.running = False
+        self.after_id = None
+        self.t = 0
+        self.ro = [0.0] * self.N
+        self.vel = [0.0] * self.N
+        self.color_i = 0
+        self.bubbles = []
+        self.auto_cd = 90
+        self.last_pos = (0, 0)
+        self.last_sound = 0.0
+        self.bind("<Button-1>", self.on_press)
+        self.bind("<B1-Motion>", self.on_drag)
+        self.bind("<Button-2>", self.next_color)
+        self.bind("<Button-3>", self.next_color)
+
+    # ---- loop ----
+    def start(self):
+        if not self.running:
+            self.running = True
+            self.tick()
+
+    def stop(self):
+        self.running = False
+        if self.after_id is not None:
+            self.after_cancel(self.after_id)
+            self.after_id = None
+
+    def tick(self):
+        self.after_id = None
+        if not self.running:
+            return
+        self.step()
+        self.render()
+        self.after_id = self.after(33, self.tick)
+
+    # ---- geometry / input ----
+    def geom(self):
+        w, h = max(self.winfo_width(), 40), max(self.winfo_height(), 40)
+        return w, h, w / 2, h * 0.52, min(w, h) * 0.27
+
+    def next_color(self, event=None):
+        self.color_i = (self.color_i + 1) % len(self.COLORS)
+
+    def squish(self, mx, my, amp, sound=True):
+        w, h, cx, cy, R = self.geom()
+        ap = math.atan2(my - cy, mx - cx)
+        if math.hypot(mx - cx, my - cy) > R * 1.6:
+            amp *= 0.3
+        for i in range(self.N):
+            d = math.cos(2 * math.pi * i / self.N - ap)
+            self.vel[i] += amp * (-max(d, 0) ** 2 + 0.45 * max(-d, 0))
+        for _ in range(2):
+            self.add_bubble(R)
+        now = time.monotonic()
+        if sound and now - self.last_sound > 0.12:
+            self.last_sound = now
+            self.play_cb(f"squish{random.randint(0, 2)}")
+
+    def on_press(self, event):
+        self.last_pos = (event.x, event.y)
+        self.squish(event.x, event.y, self.geom()[4] * 0.12)
+
+    def on_drag(self, event):
+        if math.hypot(event.x - self.last_pos[0], event.y - self.last_pos[1]) > 18:
+            self.last_pos = (event.x, event.y)
+            self.squish(event.x, event.y, self.geom()[4] * 0.07)
+
+    # ---- simulation ----
+    def add_bubble(self, R):
+        if len(self.bubbles) < 8:
+            self.bubbles.append({"x": random.uniform(-R * 0.5, R * 0.5),
+                                 "y": random.uniform(0, R * 0.4),
+                                 "r": random.uniform(R * 0.04, R * 0.1),
+                                 "pop": -1})
+
+    def step(self):
+        self.t += 1
+        w, h, cx, cy, R = self.geom()
+        N, ro, vel = self.N, self.ro, self.vel
+        for i in range(N):
+            nb = ro[i - 1] + ro[(i + 1) % N] - 2 * ro[i]
+            vel[i] += -0.06 * ro[i] - 0.05 * vel[i] + 0.18 * nb
+        for i in range(N):
+            ro[i] += vel[i]
+
+        self.auto_cd -= 1
+        if self.auto_cd <= 0:           # gentle self-squish (silent)
+            self.auto_cd = random.randint(90, 200)
+            a = random.uniform(0, 2 * math.pi)
+            self.squish(cx + math.cos(a) * R, cy + math.sin(a) * R,
+                        R * 0.07, sound=False)
+
+        if random.random() < 0.06:
+            self.add_bubble(R)
+        alive = []
+        for b in self.bubbles:
+            if b["pop"] >= 0:
+                b["pop"] += 1
+                if b["pop"] > 8:
+                    continue
+            else:
+                b["y"] -= 0.5
+                b["x"] += math.sin(self.t * 0.08 + b["r"]) * 0.2
+                if b["y"] < -R * 0.45:
+                    b["pop"] = 0
+            alive.append(b)
+        self.bubbles = alive
+
+    # ---- drawing ----
+    def render(self):
+        w, h, cx, cy, R = self.geom()
+        if self.winfo_width() < 20:
+            return
+        self.delete("all")
+        fill, dark = self.COLORS[self.color_i]
+
+        bands = 10
+        for i in range(bands):
+            col = blend("#150f2e", "#2e1a5e", i / (bands - 1))
+            self.create_rectangle(0, h * i / bands, w, h * (i + 1) / bands + 1,
+                                  fill=col, outline="")
+        self.create_text(w / 2, 14, text="SLIME ASMR", font=(FONT, 12, "bold"),
+                         fill="#e9d5ff")
+
+        self.create_oval(cx - R * 1.5, cy + R * 0.7, cx + R * 1.5, cy + R * 1.2,
+                         fill="#0f0a24", outline="")
+        self.create_oval(cx - R * 1.25, cy + R * 0.5, cx + R * 1.25, cy + R * 0.98,
+                         fill=blend(dark, "#150f2e", 0.35), outline="")
+
+        lim = R * 0.55
+        pts = []
+        for i in range(self.N):
+            a = 2 * math.pi * i / self.N
+            wob = (math.sin(self.t * 0.05 + i * 0.8) * 0.012
+                   + math.sin(self.t * 0.031 - i * 1.7) * 0.01) * R
+            r = R + max(-lim, min(lim, self.ro[i])) + wob
+            pts += [cx + r * math.cos(a), cy + r * math.sin(a) * 0.82]
+        self.create_polygon(pts, smooth=True, fill=fill, outline=dark, width=3)
+
+        # gloss
+        hl = lighten(fill, 0.7)
+        self.create_oval(cx - R * 0.55, cy - R * 0.5, cx - R * 0.15, cy - R * 0.3,
+                         fill=hl, outline="")
+        self.create_oval(cx - R * 0.1, cy - R * 0.55, cx + R * 0.02, cy - R * 0.47,
+                         fill=hl, outline="")
+
+        # bubbles
+        for b in self.bubbles:
+            bx, by, br = cx + b["x"], cy + b["y"], b["r"]
+            if b["pop"] >= 0:
+                pr = br * (1 + b["pop"] * 0.35)
+                self.create_oval(bx - pr, by - pr, bx + pr, by + pr,
+                                 outline=hl, width=2)
+            else:
+                self.create_oval(bx - br, by - br, bx + br, by + br,
+                                 outline=hl, width=2)
+                self.create_oval(bx - br * 0.5, by - br * 0.6, bx - br * 0.1,
+                                 by - br * 0.25, fill="#ffffff", outline="")
+
+        self.create_text(w / 2, h - 14, text="click to squish  \u00b7  right-click: color",
+                         font=(FONT, 9), fill="#a78bfa")
 
 
 # ---------------------------------------------------------------- game
@@ -197,20 +629,33 @@ class Connect10:
         self.volume = tk.IntVar(value=60)
         self.fx_enabled = tk.BooleanVar(value=True)
         self.flash_enabled = tk.BooleanVar(value=True)
+        self.fullscreen = False
+        self.fs_var = tk.BooleanVar(value=False)
+        self.panels_on = tk.BooleanVar(value=False)
         self.colors = dict(DEFAULT_COLORS)
         self.p_names = dict(DEFAULT_NAMES)
         self.scores = {1: 0, 2: 0, "draw": 0}
         self.win_cells = []
         self.result = None
 
+        # ---- layout: [runner] [game] [slime] ----
+        root.columnconfigure(0, weight=1)
+        root.columnconfigure(1, weight=0)
+        root.columnconfigure(2, weight=1)
+        root.rowconfigure(0, weight=1)
+        self.center = tk.Frame(root, bg=BG)
+        self.center.grid(row=0, column=1)
+        self.left_panel = RunnerPanel(root, width=300, height=400)
+        self.right_panel = SlimePanel(root, self.play, width=300, height=400)
+
         # ---- title ----
-        tk.Label(root, text="CONNECT 10", font=(FONT, 22, "bold"),
+        tk.Label(self.center, text="CONNECT 10", font=(FONT, 22, "bold"),
                  fg=TEXT, bg=BG).pack(pady=(14, 0))
-        tk.Label(root, text="get ten in a row", font=(FONT, 10),
+        tk.Label(self.center, text="get ten in a row", font=(FONT, 10),
                  fg=MUTED, bg=BG).pack(pady=(0, 8))
 
         # ---- scoreboard cards ----
-        score_frame = tk.Frame(root, bg=BG)
+        score_frame = tk.Frame(self.center, bg=BG)
         score_frame.pack(padx=14, fill="x")
         for col in range(3):
             score_frame.columnconfigure(col, weight=1, uniform="score")
@@ -230,7 +675,7 @@ class Connect10:
             self.score_vals[key] = val
 
         # ---- status ----
-        status_frame = tk.Frame(root, bg=BG)
+        status_frame = tk.Frame(self.center, bg=BG)
         status_frame.pack(pady=(12, 6))
         self.dot = tk.Canvas(status_frame, width=18, height=18, bg=BG,
                              highlightthickness=0)
@@ -243,7 +688,7 @@ class Connect10:
         # ---- board canvas ----
         self.board_w = COLS * CELL + 2 * MARGIN
         self.board_h = ROWS * CELL + 2 * MARGIN
-        self.canvas = tk.Canvas(root, width=self.board_w,
+        self.canvas = tk.Canvas(self.center, width=self.board_w,
                                 height=TOP + self.board_h + 8, bg=BG,
                                 highlightthickness=0)
         self.canvas.pack(padx=14)
@@ -253,14 +698,17 @@ class Connect10:
 
         # Track mouse movement anywhere on the window to reset the 5s timer
         root.bind("<Motion>", self.on_mouse_move)
+        root.bind("<F11>", self.toggle_fullscreen)
+        root.bind("<Escape>", self.exit_fullscreen)
 
         # ---- buttons ----
-        btn_frame = tk.Frame(root, bg=BG)
+        btn_frame = tk.Frame(self.center, bg=BG)
         btn_frame.pack(pady=14)
         FlatButton(btn_frame, "New Game", self.reset, bg=ACCENT,
                    hover=ACCENT_HOVER, fg=ACCENT_TEXT).pack(side="left", padx=5)
         FlatButton(btn_frame, "Reset Scores", self.reset_scores).pack(side="left", padx=5)
         FlatButton(btn_frame, "Options", self.open_options).pack(side="left", padx=5)
+        FlatButton(btn_frame, "Fullscreen", self.toggle_fullscreen).pack(side="left", padx=5)
 
         self.reset()
 
@@ -278,6 +726,50 @@ class Connect10:
 
     def play(self, kind):
         self.sound.play(kind, self.volume.get())
+
+    # ---------- fullscreen & side panels ----------
+    def toggle_fullscreen(self, event=None):
+        self.set_fullscreen(not self.fullscreen)
+
+    def exit_fullscreen(self, event=None):
+        if self.fullscreen:
+            self.set_fullscreen(False)
+
+    def set_fullscreen(self, on):
+        self.fullscreen = bool(on)
+        self.fs_var.set(self.fullscreen)
+        self.root.resizable(True, True)
+        try:
+            self.root.attributes("-fullscreen", self.fullscreen)
+        except tk.TclError:
+            pass
+        if not self.fullscreen:
+            self.root.resizable(False, False)
+            self.root.geometry("")
+        self.panels_on.set(self.fullscreen)     # panels follow fullscreen
+        self.apply_panels()
+
+    def apply_panels(self):
+        if self.panels_on.get():
+            self.left_panel.grid(row=0, column=0, sticky="nsew", padx=(10, 6), pady=10)
+            self.right_panel.grid(row=0, column=2, sticky="nsew", padx=(6, 10), pady=10)
+            self.left_panel.start()
+            self.right_panel.start()
+        else:
+            self.left_panel.stop()
+            self.right_panel.stop()
+            self.left_panel.grid_remove()
+            self.right_panel.grid_remove()
+            if not self.fullscreen:
+                self.root.geometry("")
+
+    def check(self, parent, text, var, command=None):
+        cb = tk.Checkbutton(parent, text=text, variable=var, command=command,
+                            font=(FONT, 11), fg=TEXT, bg=PANEL, selectcolor=PANEL2,
+                            activebackground=PANEL, activeforeground=TEXT,
+                            highlightthickness=0, bd=0, anchor="w")
+        cb.pack(fill="x", pady=2)
+        return cb
 
     # ---------- options window ----------
     def section(self, parent, title):
@@ -346,6 +838,13 @@ class Connect10:
                          font=(FONT, 10))
         scale.pack()
         scale.bind("<ButtonRelease-1>", lambda e: self.play("drop"))
+
+        # Display
+        sec = self.section(win, "Display")
+        self.check(sec, "Fullscreen (F11 / Esc)", self.fs_var,
+                   lambda: self.set_fullscreen(self.fs_var.get()))
+        self.check(sec, "Side panels (runner + slime)", self.panels_on,
+                   self.apply_panels)
 
         # Effects
         sec = self.section(win, "Effects")

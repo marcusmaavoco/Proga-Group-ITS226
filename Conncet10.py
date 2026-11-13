@@ -1,3 +1,4 @@
+import math
 import tkinter as tk
 from tkinter import messagebox
 
@@ -12,12 +13,19 @@ EMPTY_COLOR = "#e5e7eb"
 PLAYER_COLORS = {1: "#ef4444", 2: "#facc15"}   # Red, Yellow
 PLAYER_NAMES = {1: "Red", 2: "Yellow"}
 
+IDLE_DELAY_MS = 5000      # 5 seconds before bell appears
+BELL_DURATION_MS = 2000   # 2 seconds of left-right movement
+BELL_FRAME_MS = 25        # animation frame interval
+
 
 class Connect10:
     def __init__(self, root):
         self.root = root
         root.title("Connect 10")
         root.resizable(False, False)
+
+        self.idle_timer = None
+        self.bell_anim_id = None
 
         self.status = tk.Label(root, text="", font=("Arial", 16, "bold"), pady=8)
         self.status.pack()
@@ -31,10 +39,91 @@ class Connect10:
         self.canvas.bind("<Motion>", self.on_hover)
         self.canvas.bind("<Leave>", lambda e: self.canvas.delete("hover"))
 
+        # Track mouse movement anywhere on the window to reset the 5s timer
+        root.bind("<Motion>", self.on_mouse_move)
+
         tk.Button(root, text="New Game", font=("Arial", 12),
                   command=self.reset).pack(pady=8)
 
         self.reset()
+
+    # ---------- idle bell reminder ----------
+    def on_mouse_move(self, event):
+        self.reset_idle_timer()
+
+    def reset_idle_timer(self):
+        if self.idle_timer is not None:
+            self.root.after_cancel(self.idle_timer)
+            self.idle_timer = None
+        if self.bell_anim_id is not None:
+            self.root.after_cancel(self.bell_anim_id)
+            self.bell_anim_id = None
+        self.canvas.delete("bell")
+
+        if not self.game_over:
+            self.idle_timer = self.root.after(IDLE_DELAY_MS, self.start_bell_reminder)
+
+    def start_bell_reminder(self):
+        self.idle_timer = None
+        if self.game_over or self.animating:
+            self.reset_idle_timer()
+            return
+        self.animate_bell(0)
+
+    def draw_bell(self, cx, cy, clapper_dx):
+        self.canvas.delete("bell")
+        # Top handle loop
+        self.canvas.create_oval(cx - 10, cy - 44, cx + 10, cy - 26,
+                                outline="#451a03", width=4, tags="bell")
+        # Swinging clapper
+        self.canvas.create_oval(cx - 11 + clapper_dx, cy + 20,
+                                cx + 11 + clapper_dx, cy + 40,
+                                fill="#d97706", outline="#451a03", width=3,
+                                tags="bell")
+        # Bell body
+        body_points = [
+            cx - 18, cy - 24,
+            cx - 12, cy - 33,
+            cx,      cy - 36,
+            cx + 12, cy - 33,
+            cx + 18, cy - 24,
+            cx + 22, cy - 4,
+            cx + 34, cy + 16,
+            cx + 38, cy + 22,
+            cx + 38, cy + 27,
+            cx - 38, cy + 27,
+            cx - 38, cy + 22,
+            cx - 34, cy + 16,
+            cx - 22, cy - 4,
+        ]
+        self.canvas.create_polygon(body_points, fill="#fbbf24",
+                                   outline="#451a03", width=3, tags="bell")
+        # Rim detail and highlight
+        self.canvas.create_line(cx - 33, cy + 16, cx + 33, cy + 16,
+                                fill="#451a03", width=2, tags="bell")
+        self.canvas.create_line(cx - 14, cy - 22, cx - 24, cy + 10,
+                                fill="#fef08a", width=3, capstyle=tk.ROUND,
+                                tags="bell")
+
+    def animate_bell(self, step):
+        total_steps = BELL_DURATION_MS // BELL_FRAME_MS
+        if step >= total_steps or self.game_over:
+            self.canvas.delete("bell")
+            self.bell_anim_id = None
+            self.reset_idle_timer()
+            return
+
+        center_x = (COLS * CELL + 2 * MARGIN) / 2
+        center_y = (ROWS * CELL + 2 * MARGIN) / 2
+
+        # Smooth left-and-right oscillation
+        offset_x = math.sin(step * 0.45) * 30
+        clapper_dx = math.sin(step * 0.45 - 0.5) * 8
+
+        self.draw_bell(center_x + offset_x, center_y, clapper_dx)
+        self.bell_anim_id = self.root.after(
+            BELL_FRAME_MS, lambda: self.animate_bell(step + 1)
+        )
 
     # ---------- game state ----------
     def reset(self):
@@ -44,6 +133,7 @@ class Connect10:
         self.animating = False
         self.draw_board()
         self.update_status()
+        self.reset_idle_timer()
 
     def update_status(self):
         self.status.config(
@@ -78,6 +168,7 @@ class Connect10:
 
     # ---------- moves ----------
     def on_click(self, event):
+        self.reset_idle_timer()
         if self.game_over or self.animating:
             return
         c = (event.x - MARGIN) // CELL
@@ -112,6 +203,7 @@ class Connect10:
         win_cells = self.check_win(r, c)
         if win_cells:
             self.game_over = True
+            self.reset_idle_timer()
             for (wr, wc) in win_cells:
                 self.canvas.itemconfig(f"cell_{wr}_{wc}", outline="white", width=4)
             self.status.config(text=f"{PLAYER_NAMES[self.current]} wins!",
@@ -121,11 +213,13 @@ class Connect10:
             return
         if all(self.board[0][col] != 0 for col in range(COLS)):
             self.game_over = True
+            self.reset_idle_timer()
             self.status.config(text="It's a draw!", fg="black")
             messagebox.showinfo("Game Over", "It's a draw!")
             return
         self.current = 2 if self.current == 1 else 1
         self.update_status()
+        self.reset_idle_timer()
 
     def check_win(self, r, c):
         player = self.board[r][c]

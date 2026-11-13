@@ -16,6 +16,7 @@ PLAYER_NAMES = {1: "Red", 2: "Yellow"}
 IDLE_DELAY_MS = 5000      # 5 seconds before bell appears
 BELL_DURATION_MS = 2000   # 2 seconds of left-right movement
 BELL_FRAME_MS = 25        # animation frame interval
+BELL_SCALE = 5.8          # fills almost the entire board
 
 
 class Connect10:
@@ -72,38 +73,41 @@ class Connect10:
 
     def draw_bell(self, cx, cy, clapper_dx):
         self.canvas.delete("bell")
+        s = BELL_SCALE
+
         # Top handle loop
-        self.canvas.create_oval(cx - 10, cy - 44, cx + 10, cy - 26,
-                                outline="#451a03", width=4, tags="bell")
-        # Swinging clapper
-        self.canvas.create_oval(cx - 11 + clapper_dx, cy + 20,
-                                cx + 11 + clapper_dx, cy + 40,
-                                fill="#d97706", outline="#451a03", width=3,
+        self.canvas.create_oval(cx - 10 * s, cy - 44 * s,
+                                cx + 10 * s, cy - 26 * s,
+                                outline="#451a03", width=max(2, int(4 * s)),
                                 tags="bell")
+        # Swinging clapper
+        self.canvas.create_oval(cx - 11 * s + clapper_dx, cy + 20 * s,
+                                cx + 11 * s + clapper_dx, cy + 40 * s,
+                                fill="#d97706", outline="#451a03",
+                                width=max(2, int(3 * s)), tags="bell")
         # Bell body
+        raw_points = [
+            (-18, -24), (-12, -33), (0, -36), (12, -33), (18, -24),
+            (22, -4), (34, 16), (38, 22), (38, 27),
+            (-38, 27), (-38, 22), (-34, 16), (-22, -4),
+        ]
         body_points = [
-            cx - 18, cy - 24,
-            cx - 12, cy - 33,
-            cx,      cy - 36,
-            cx + 12, cy - 33,
-            cx + 18, cy - 24,
-            cx + 22, cy - 4,
-            cx + 34, cy + 16,
-            cx + 38, cy + 22,
-            cx + 38, cy + 27,
-            cx - 38, cy + 27,
-            cx - 38, cy + 22,
-            cx - 34, cy + 16,
-            cx - 22, cy - 4,
+            coord
+            for dx, dy in raw_points
+            for coord in (cx + dx * s, cy + dy * s)
         ]
         self.canvas.create_polygon(body_points, fill="#fbbf24",
-                                   outline="#451a03", width=3, tags="bell")
+                                   outline="#451a03",
+                                   width=max(2, int(3 * s)), tags="bell")
         # Rim detail and highlight
-        self.canvas.create_line(cx - 33, cy + 16, cx + 33, cy + 16,
-                                fill="#451a03", width=2, tags="bell")
-        self.canvas.create_line(cx - 14, cy - 22, cx - 24, cy + 10,
-                                fill="#fef08a", width=3, capstyle=tk.ROUND,
+        self.canvas.create_line(cx - 33 * s, cy + 16 * s,
+                                cx + 33 * s, cy + 16 * s,
+                                fill="#451a03", width=max(2, int(2 * s)),
                                 tags="bell")
+        self.canvas.create_line(cx - 14 * s, cy - 22 * s,
+                                cx - 24 * s, cy + 10 * s,
+                                fill="#fef08a", width=max(2, int(3 * s)),
+                                capstyle=tk.ROUND, tags="bell")
 
     def animate_bell(self, step):
         total_steps = BELL_DURATION_MS // BELL_FRAME_MS
@@ -113,12 +117,15 @@ class Connect10:
             self.reset_idle_timer()
             return
 
-        center_x = (COLS * CELL + 2 * MARGIN) / 2
-        center_y = (ROWS * CELL + 2 * MARGIN) / 2
+        canvas_w = COLS * CELL + 2 * MARGIN
+        canvas_h = ROWS * CELL + 2 * MARGIN
+        center_x = canvas_w / 2
+        center_y = canvas_h / 2
 
-        # Smooth left-and-right oscillation
-        offset_x = math.sin(step * 0.45) * 30
-        clapper_dx = math.sin(step * 0.45 - 0.5) * 8
+        # Keep the full width of the giant bell inside the canvas while swinging
+        max_swing = max(15, (canvas_w / 2) - (38 * BELL_SCALE) - 8)
+        offset_x = math.sin(step * 0.45) * max_swing
+        clapper_dx = math.sin(step * 0.45 - 0.5) * (8 * BELL_SCALE)
 
         self.draw_bell(center_x + offset_x, center_y, clapper_dx)
         self.bell_anim_id = self.root.after(

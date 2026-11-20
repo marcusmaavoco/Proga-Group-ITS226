@@ -13,11 +13,9 @@ import wave
 from tkinter import colorchooser, messagebox
 
 # ---------------------------------------------------------------- settings
-ROWS = 20
-COLS = 20
 WIN_LENGTH = 10
-CELL = 28                 # smaller cells so a 20x20 board fits on screen
-SCALE = CELL / 56         # scales the hard-coded piece details
+BOARD_SIZES = {10: 56, 15: 38, 20: 28}   # board size -> cell size in px
+DEFAULT_BOARD = 20
 MARGIN = 12
 TOP = 56                  # strip above the board (hover preview / result)
 
@@ -737,8 +735,12 @@ class Connect10:
         self.status.pack(side="left")
 
         # ---- board canvas ----
-        self.board_w = COLS * CELL + 2 * MARGIN
-        self.board_h = ROWS * CELL + 2 * MARGIN
+        self.size_buttons = {}
+        self.rows = self.cols = DEFAULT_BOARD
+        self.cell = BOARD_SIZES[DEFAULT_BOARD]
+        self.scale = self.cell / 56         # scales the piece details
+        self.board_w = self.cols * self.cell + 2 * MARGIN
+        self.board_h = self.rows * self.cell + 2 * MARGIN
         self.canvas = tk.Canvas(self.center, width=self.board_w,
                                 height=TOP + self.board_h + 8, bg=BG,
                                 highlightthickness=0)
@@ -849,6 +851,20 @@ class Connect10:
             self.mode_buttons[val] = b
         self.refresh_mode_buttons()
 
+        # Board size (segmented control)
+        sec = self.section(win, "Board size")
+        row = tk.Frame(sec, bg=PANEL)
+        row.pack(fill="x")
+        self.size_buttons = {}
+        for n in BOARD_SIZES:
+            b = FlatButton(row, f"{n} x {n}", lambda n=n: self.set_board_size(n),
+                           padx=14, pady=7)
+            b.pack(side="left", expand=True, fill="x", padx=2)
+            self.size_buttons[n] = b
+        self.refresh_size_buttons()
+        tk.Label(sec, text="Changing the size starts a new game.",
+                 font=(FONT, 9), fg=MUTED, bg=PANEL).pack(anchor="w", pady=(6, 0))
+
         # Players: name + color
         sec = self.section(win, "Players")
         self.name_vars = {}
@@ -919,6 +935,29 @@ class Connect10:
         self.mode.set(value)
         self.refresh_mode_buttons()
         self.on_mode_change()
+
+    def refresh_size_buttons(self):
+        for n, b in self.size_buttons.items():
+            if not b.winfo_exists():
+                continue
+            if n == self.rows:
+                b.restyle(ACCENT, ACCENT_HOVER, ACCENT_TEXT)
+            else:
+                b.restyle(PANEL2, PANEL2_HOVER, TEXT)
+
+    def set_board_size(self, size):
+        if size == self.rows:
+            return
+        self.rows = self.cols = size
+        self.cell = BOARD_SIZES[size]
+        self.scale = self.cell / 56
+        self.board_w = self.cols * self.cell + 2 * MARGIN
+        self.board_h = self.rows * self.cell + 2 * MARGIN
+        self.canvas.config(width=self.board_w, height=TOP + self.board_h + 8)
+        self.refresh_size_buttons()
+        self.reset()
+        if not self.fullscreen:
+            self.root.geometry("")
 
     def update_p2_entry_state(self):
         if self.p2_entry is not None and self.p2_entry.winfo_exists():
@@ -1091,7 +1130,7 @@ class Connect10:
         if self.pulse_id is not None:
             self.root.after_cancel(self.pulse_id)
             self.pulse_id = None
-        self.board = [[0] * COLS for _ in range(ROWS)]
+        self.board = [[0] * self.cols for _ in range(self.rows)]
         self.current = 1
         self.game_over = False
         self.animating = False
@@ -1104,9 +1143,9 @@ class Connect10:
 
     # ---------- drawing ----------
     def cell_xy(self, r, c):
-        x1 = MARGIN + c * CELL + 4
-        y1 = TOP + MARGIN + r * CELL + 4
-        return x1, y1, x1 + CELL - 8, y1 + CELL - 8
+        x1 = MARGIN + c * self.cell + 4
+        y1 = TOP + MARGIN + r * self.cell + 4
+        return x1, y1, x1 + self.cell - 8, y1 + self.cell - 8
 
     def set_cell(self, r, c, player):
         """Paint one cell as empty (0) or as a player's glossy piece."""
@@ -1130,8 +1169,8 @@ class Connect10:
                    fill=BOARD_SHADOW, outline="")
         round_rect(self.canvas, 3, TOP, w - 3, TOP + h, 26,
                    fill=BOARD_COLOR, outline=BOARD_EDGE, width=3)
-        for r in range(ROWS):
-            for c in range(COLS):
+        for r in range(self.rows):
+            for c in range(self.cols):
                 x1, y1, x2, y2 = self.cell_xy(r, c)
                 # hole (dark ring) -> piece -> gloss
                 self.canvas.create_oval(x1, y1, x2, y2, fill=HOLE_EDGE,
@@ -1139,8 +1178,8 @@ class Connect10:
                 self.canvas.create_oval(x1 + 2, y1 + 2, x2 - 2, y2 - 2,
                                         fill=EMPTY_COLOR, outline="#081027",
                                         width=1, tags=f"cell_{r}_{c}")
-                self.canvas.create_oval(x1 + 11 * SCALE, y1 + 9 * SCALE,
-                                        x1 + 25 * SCALE, y1 + 18 * SCALE,
+                self.canvas.create_oval(x1 + 11 * self.scale, y1 + 9 * self.scale,
+                                        x1 + 25 * self.scale, y1 + 18 * self.scale,
                                         fill="#ffffff", outline="",
                                         state="hidden", tags=f"shine_{r}_{c}")
                 self.set_cell(r, c, self.board[r][c])
@@ -1184,17 +1223,18 @@ class Connect10:
         self.canvas.delete("hover")
         if self.game_over or self.animating or self.is_bot_turn():
             return
-        c = (event.x - MARGIN) // CELL
-        if 0 <= c < COLS:
+        c = (event.x - MARGIN) // self.cell
+        if 0 <= c < self.cols:
             color = self.colors[self.current]
-            x1 = MARGIN + c * CELL
+            x1 = MARGIN + c * self.cell
             # column outline
-            round_rect(self.canvas, x1 + 2, TOP + 2, x1 + CELL - 2,
-                       TOP + self.board_h - 2, 10, fill="", outline=color,
+            round_rect(self.canvas, x1 + 2, TOP + 2, x1 + self.cell - 2,
+                       TOP + self.board_h - 2, int(self.cell * 0.33),
+                       fill="", outline=color,
                        width=2, tags="hover")
             # ghost piece above the board
-            cx, cy = x1 + CELL / 2, TOP / 2
-            gr = CELL * 0.36
+            cx, cy = x1 + self.cell / 2, TOP / 2
+            gr = self.cell * 0.36
             self.canvas.create_oval(cx - gr, cy - gr, cx + gr, cy + gr,
                                     fill=color, outline=darken(color, 0.75),
                                     width=2, tags="hover")
@@ -1206,7 +1246,7 @@ class Connect10:
     # ---------- moves ----------
     def drop_row(self, c):
         """Lowest empty row in column c, or None if the column is full."""
-        for r in range(ROWS - 1, -1, -1):
+        for r in range(self.rows - 1, -1, -1):
             if self.board[r][c] == 0:
                 return r
         return None
@@ -1220,8 +1260,8 @@ class Connect10:
             return
         if self.animating or self.is_bot_turn():
             return
-        c = (event.x - MARGIN) // CELL
-        if not (0 <= c < COLS):
+        c = (event.x - MARGIN) // self.cell
+        if not (0 <= c < self.cols):
             return
         target = self.drop_row(c)
         if target is None:
@@ -1259,7 +1299,7 @@ class Connect10:
             self.pulse_win()
             self.start_celebration(win_cells, self.colors[self.current])
             return
-        if all(self.board[0][col] != 0 for col in range(COLS)):
+        if all(self.board[0][col] != 0 for col in range(self.cols)):
             self.game_over = True
             self.end_time = time.monotonic()
             self.reset_idle_timer()
@@ -1425,7 +1465,7 @@ class Connect10:
             cells = [(r, c)]
             for sign in (1, -1):
                 nr, nc = r + dr * sign, c + dc * sign
-                while 0 <= nr < ROWS and 0 <= nc < COLS and self.board[nr][nc] == player:
+                while 0 <= nr < self.rows and 0 <= nc < self.cols and self.board[nr][nc] == player:
                     cells.append((nr, nc))
                     nr += dr * sign
                     nc += dc * sign
@@ -1441,7 +1481,7 @@ class Connect10:
             count = 1
             for sign in (1, -1):
                 nr, nc = r + dr * sign, c + dc * sign
-                while 0 <= nr < ROWS and 0 <= nc < COLS and self.board[nr][nc] == player:
+                while 0 <= nr < self.rows and 0 <= nc < self.cols and self.board[nr][nc] == player:
                     count += 1
                     nr += dr * sign
                     nc += dc * sign
@@ -1450,7 +1490,7 @@ class Connect10:
 
     def choose_bot_column(self):
         bot, human = 2, 1
-        options = [(c, self.drop_row(c)) for c in range(COLS)
+        options = [(c, self.drop_row(c)) for c in range(self.cols)
                    if self.drop_row(c) is not None]
 
         # 1) win immediately
@@ -1466,7 +1506,7 @@ class Connect10:
         best_score, best_cols = None, []
         for c, r in options:
             score = self.line_length(r, c, bot) * 2 + self.line_length(r, c, human)
-            score -= abs(c - (COLS - 1) / 2) * 0.3   # slight centre preference
+            score -= abs(c - (self.cols - 1) / 2) * 0.3   # slight centre preference
             # don't hand the human a winning spot right above
             if r - 1 >= 0 and self.line_length(r - 1, c, human) >= WIN_LENGTH:
                 score -= 100

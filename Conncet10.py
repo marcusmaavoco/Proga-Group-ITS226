@@ -13,10 +13,11 @@ import wave
 from tkinter import colorchooser, messagebox
 
 # ---------------------------------------------------------------- settings
-ROWS = 10
-COLS = 10
+ROWS = 20
+COLS = 20
 WIN_LENGTH = 10
-CELL = 56
+CELL = 28                 # smaller cells so a 20x20 board fits on screen
+SCALE = CELL / 56         # scales the hard-coded piece details
 MARGIN = 12
 TOP = 56                  # strip above the board (hover preview / result)
 
@@ -648,9 +649,28 @@ class Connect10:
         self.left_panel = RunnerPanel(root, width=300, height=400)
         self.right_panel = SlimePanel(root, self.play, width=300, height=400)
 
+        # ---- top bar: New Game / Options / Fullscreen / Volume ----
+        top_bar = tk.Frame(self.center, bg=PANEL, padx=10, pady=8)
+        top_bar.pack(fill="x", padx=14, pady=(12, 0))
+        FlatButton(top_bar, "New Game", self.reset, bg=ACCENT,
+                   hover=ACCENT_HOVER, fg=ACCENT_TEXT, size=10,
+                   padx=12, pady=5).pack(side="left", padx=(0, 6))
+        FlatButton(top_bar, "Options", self.open_options, size=10,
+                   padx=12, pady=5).pack(side="left", padx=3)
+        FlatButton(top_bar, "Fullscreen", self.toggle_fullscreen, size=10,
+                   padx=12, pady=5).pack(side="left", padx=3)
+        vol = tk.Scale(top_bar, from_=0, to=100, orient="horizontal",
+                       variable=self.volume, length=140, showvalue=False,
+                       bg=PANEL, troughcolor=PANEL2, highlightthickness=0,
+                       bd=0, activebackground=ACCENT, sliderrelief="flat")
+        vol.pack(side="right")
+        vol.bind("<ButtonRelease-1>", lambda e: self.play("drop"))
+        tk.Label(top_bar, text="Volume", font=(FONT, 10, "bold"),
+                 fg=MUTED, bg=PANEL).pack(side="right", padx=(0, 6))
+
         # ---- title ----
         tk.Label(self.center, text="CONNECT 10", font=(FONT, 22, "bold"),
-                 fg=TEXT, bg=BG).pack(pady=(14, 0))
+                 fg=TEXT, bg=BG).pack(pady=(8, 0))
         tk.Label(self.center, text="get ten in a row", font=(FONT, 10),
                  fg=MUTED, bg=BG).pack(pady=(0, 8))
 
@@ -701,14 +721,10 @@ class Connect10:
         root.bind("<F11>", self.toggle_fullscreen)
         root.bind("<Escape>", self.exit_fullscreen)
 
-        # ---- buttons ----
+        # ---- buttons (bottom) ----
         btn_frame = tk.Frame(self.center, bg=BG)
         btn_frame.pack(pady=14)
-        FlatButton(btn_frame, "New Game", self.reset, bg=ACCENT,
-                   hover=ACCENT_HOVER, fg=ACCENT_TEXT).pack(side="left", padx=5)
-        FlatButton(btn_frame, "Reset Scores", self.reset_scores).pack(side="left", padx=5)
-        FlatButton(btn_frame, "Options", self.open_options).pack(side="left", padx=5)
-        FlatButton(btn_frame, "Fullscreen", self.toggle_fullscreen).pack(side="left", padx=5)
+        FlatButton(btn_frame, "Reset Scores", self.reset_scores).pack()
 
         self.reset()
 
@@ -828,16 +844,6 @@ class Connect10:
         FlatButton(sec, "Reset colors", self.reset_colors, size=10,
                    padx=10, pady=4).grid(row=2, column=0, columnspan=4,
                                          pady=(8, 0))
-
-        # Volume
-        sec = self.section(win, "Volume")
-        scale = tk.Scale(sec, from_=0, to=100, orient="horizontal",
-                         variable=self.volume, length=300, bg=PANEL, fg=TEXT,
-                         troughcolor=PANEL2, highlightthickness=0, bd=0,
-                         activebackground=ACCENT, sliderrelief="flat",
-                         font=(FONT, 10))
-        scale.pack()
-        scale.bind("<ButtonRelease-1>", lambda e: self.play("drop"))
 
         # Display
         sec = self.section(win, "Display")
@@ -1099,15 +1105,16 @@ class Connect10:
                 # hole (dark ring) -> piece -> gloss
                 self.canvas.create_oval(x1, y1, x2, y2, fill=HOLE_EDGE,
                                         outline=BOARD_EDGE, width=2)
-                self.canvas.create_oval(x1 + 3, y1 + 3, x2 - 3, y2 - 3,
+                self.canvas.create_oval(x1 + 2, y1 + 2, x2 - 2, y2 - 2,
                                         fill=EMPTY_COLOR, outline="#081027",
-                                        width=2, tags=f"cell_{r}_{c}")
-                self.canvas.create_oval(x1 + 11, y1 + 9, x1 + 25, y1 + 18,
+                                        width=1, tags=f"cell_{r}_{c}")
+                self.canvas.create_oval(x1 + 11 * SCALE, y1 + 9 * SCALE,
+                                        x1 + 25 * SCALE, y1 + 18 * SCALE,
                                         fill="#ffffff", outline="",
                                         state="hidden", tags=f"shine_{r}_{c}")
                 self.set_cell(r, c, self.board[r][c])
         for (wr, wc) in self.win_cells:
-            self.canvas.itemconfig(f"cell_{wr}_{wc}", outline="white", width=5)
+            self.canvas.itemconfig(f"cell_{wr}_{wc}", outline="white", width=3)
         self.draw_banner()
 
     def draw_banner(self):
@@ -1136,7 +1143,7 @@ class Connect10:
         else:
             color = "white" if n % 2 == 0 else "#fde047"
         for (wr, wc) in self.win_cells:
-            self.canvas.itemconfig(f"cell_{wr}_{wc}", outline=color, width=5)
+            self.canvas.itemconfig(f"cell_{wr}_{wc}", outline=color, width=3)
         if n < 12:
             self.pulse_id = self.root.after(220, lambda: self.pulse_win(n + 1))
         else:
@@ -1152,14 +1159,16 @@ class Connect10:
             x1 = MARGIN + c * CELL
             # column outline
             round_rect(self.canvas, x1 + 2, TOP + 2, x1 + CELL - 2,
-                       TOP + self.board_h - 2, 18, fill="", outline=color,
-                       width=3, tags="hover")
+                       TOP + self.board_h - 2, 10, fill="", outline=color,
+                       width=2, tags="hover")
             # ghost piece above the board
             cx, cy = x1 + CELL / 2, TOP / 2
-            self.canvas.create_oval(cx - 17, cy - 17, cx + 17, cy + 17,
+            gr = CELL * 0.36
+            self.canvas.create_oval(cx - gr, cy - gr, cx + gr, cy + gr,
                                     fill=color, outline=darken(color, 0.75),
                                     width=2, tags="hover")
-            self.canvas.create_oval(cx - 9, cy - 11, cx + 1, cy - 4,
+            self.canvas.create_oval(cx - gr * 0.5, cy - gr * 0.65,
+                                    cx + gr * 0.05, cy - gr * 0.25,
                                     fill=lighten(color, 0.55), outline="",
                                     tags="hover")
 

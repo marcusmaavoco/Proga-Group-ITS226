@@ -38,6 +38,7 @@ MUTED = "#94a3b8"
 ACCENT = "#38bdf8"
 ACCENT_HOVER = "#7dd3fc"
 ACCENT_TEXT = "#06121f"
+LIGHT_GREEN = "#86efac"      # volume knob
 
 BOARD_COLOR = "#1d4ed8"
 BOARD_EDGE = "#172554"
@@ -194,6 +195,39 @@ class SoundPlayer:
                     subprocess.Popen(args, stderr=subprocess.DEVNULL)
         except Exception:
             pass  # sound is optional; never break the game
+
+
+class VolumeSlider(tk.Canvas):
+    """Flat volume slider with a light green knob (bound to an IntVar 0-100)."""
+
+    def __init__(self, parent, variable, on_release=None, width=140, height=22,
+                 bg=PANEL):
+        super().__init__(parent, width=width, height=height, bg=bg,
+                         highlightthickness=0, cursor="hand2")
+        self.var, self.on_release = variable, on_release
+        self.w, self.h, self.pad = width, height, 9
+        self.bind("<Button-1>", self.on_move)
+        self.bind("<B1-Motion>", self.on_move)
+        self.bind("<ButtonRelease-1>",
+                  lambda e: self.on_release() if self.on_release else None)
+        self.var.trace_add("write", lambda *a: self.draw())
+        self.draw()
+
+    def on_move(self, e):
+        span = self.w - 2 * self.pad
+        self.var.set(max(0, min(100, round((e.x - self.pad) / span * 100))))
+
+    def draw(self):
+        self.delete("all")
+        span = self.w - 2 * self.pad
+        x = self.pad + span * self.var.get() / 100
+        cy = self.h / 2
+        self.create_line(self.pad, cy, self.w - self.pad, cy, fill=PANEL2,
+                         width=4, capstyle=tk.ROUND)
+        self.create_line(self.pad, cy, x, cy, fill=LIGHT_GREEN, width=4,
+                         capstyle=tk.ROUND)
+        self.create_oval(x - 8, cy - 8, x + 8, cy + 8, fill=LIGHT_GREEN,
+                         outline="")
 
 
 # ---------------------------------------------------------------- side panels
@@ -659,12 +693,9 @@ class Connect10:
                    padx=12, pady=5).pack(side="left", padx=3)
         FlatButton(top_bar, "Fullscreen", self.toggle_fullscreen, size=10,
                    padx=12, pady=5).pack(side="left", padx=3)
-        vol = tk.Scale(top_bar, from_=0, to=100, orient="horizontal",
-                       variable=self.volume, length=140, showvalue=False,
-                       bg=PANEL, troughcolor=PANEL2, highlightthickness=0,
-                       bd=0, activebackground=ACCENT, sliderrelief="flat")
+        vol = VolumeSlider(top_bar, self.volume,
+                           on_release=lambda: self.play("drop"))
         vol.pack(side="right")
-        vol.bind("<ButtonRelease-1>", lambda e: self.play("drop"))
         tk.Label(top_bar, text="Volume", font=(FONT, 10, "bold"),
                  fg=MUTED, bg=PANEL).pack(side="right", padx=(0, 6))
 

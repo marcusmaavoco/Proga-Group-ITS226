@@ -681,21 +681,23 @@ class Connect10:
         self.left_panel = RunnerPanel(root, width=300, height=400)
         self.right_panel = SlimePanel(root, self.play, width=300, height=400)
 
-        # ---- top bar: New Game / Options / Fullscreen / Volume ----
-        top_bar = tk.Frame(self.center, bg=PANEL, padx=10, pady=8)
+        # ---- top bar: New Game / Reset Scores / Options / Fullscreen / Volume ----
+        top_bar = tk.Frame(self.center, bg=PANEL, padx=8, pady=8)
         top_bar.pack(fill="x", padx=14, pady=(12, 0))
         FlatButton(top_bar, "New Game", self.reset, bg=ACCENT,
                    hover=ACCENT_HOVER, fg=ACCENT_TEXT, size=10,
-                   padx=12, pady=5).pack(side="left", padx=(0, 6))
+                   padx=10, pady=5).pack(side="left", padx=(0, 4))
+        FlatButton(top_bar, "Reset Scores", self.reset_scores, size=10,
+                   padx=10, pady=5).pack(side="left", padx=3)
         FlatButton(top_bar, "Options", self.open_options, size=10,
-                   padx=12, pady=5).pack(side="left", padx=3)
+                   padx=10, pady=5).pack(side="left", padx=3)
         FlatButton(top_bar, "Fullscreen", self.toggle_fullscreen, size=10,
-                   padx=12, pady=5).pack(side="left", padx=3)
-        vol = VolumeSlider(top_bar, self.volume,
+                   padx=10, pady=5).pack(side="left", padx=3)
+        vol = VolumeSlider(top_bar, self.volume, width=110,
                            on_release=lambda: self.play("drop"))
         vol.pack(side="right")
-        tk.Label(top_bar, text="Volume", font=(FONT, 10, "bold"),
-                 fg=MUTED, bg=PANEL).pack(side="right", padx=(0, 6))
+        tk.Label(top_bar, text="Vol", font=(FONT, 10, "bold"),
+                 fg=MUTED, bg=PANEL).pack(side="right", padx=(0, 4))
 
         # ---- title ----
         tk.Label(self.center, text="CONNECT 10", font=(FONT, 22, "bold"),
@@ -754,11 +756,6 @@ class Connect10:
         root.bind("<F11>", self.toggle_fullscreen)
         root.bind("<Escape>", self.exit_fullscreen)
 
-        # ---- buttons (bottom) ----
-        btn_frame = tk.Frame(self.center, bg=BG)
-        btn_frame.pack(pady=14)
-        FlatButton(btn_frame, "Reset Scores", self.reset_scores).pack()
-
         self.reset()
 
     # ---------- helpers ----------
@@ -784,6 +781,25 @@ class Connect10:
         if self.fullscreen:
             self.set_fullscreen(False)
 
+    def apply_board_geometry(self):
+        """Pick a cell size (fits the screen in fullscreen) and resize canvas."""
+        base = BOARD_SIZES[self.rows]
+        cell = base
+        if self.fullscreen:
+            self.root.update_idletasks()
+            board_extra = TOP + 2 * MARGIN + 8
+            overhead = (self.center.winfo_reqheight()
+                        - self.canvas.winfo_reqheight() + board_extra)
+            avail_h = self.root.winfo_screenheight() - overhead - 24
+            avail_w = self.root.winfo_screenwidth() * 0.5
+            cell = int(min(avail_h / self.rows, avail_w / self.cols))
+            cell = max(14, min(72, cell))
+        self.cell = cell
+        self.scale = cell / 56
+        self.board_w = self.cols * cell + 2 * MARGIN
+        self.board_h = self.rows * cell + 2 * MARGIN
+        self.canvas.config(width=self.board_w, height=TOP + self.board_h + 8)
+
     def set_fullscreen(self, on):
         self.fullscreen = bool(on)
         self.fs_var.set(self.fullscreen)
@@ -797,6 +813,8 @@ class Connect10:
             self.root.geometry("")
         self.panels_on.set(self.fullscreen)     # panels follow fullscreen
         self.apply_panels()
+        self.apply_board_geometry()
+        self.draw_board()
 
     def apply_panels(self):
         if self.panels_on.get():
@@ -949,11 +967,7 @@ class Connect10:
         if size == self.rows:
             return
         self.rows = self.cols = size
-        self.cell = BOARD_SIZES[size]
-        self.scale = self.cell / 56
-        self.board_w = self.cols * self.cell + 2 * MARGIN
-        self.board_h = self.rows * self.cell + 2 * MARGIN
-        self.canvas.config(width=self.board_w, height=TOP + self.board_h + 8)
+        self.apply_board_geometry()
         self.refresh_size_buttons()
         self.reset()
         if not self.fullscreen:
@@ -1531,3 +1545,5 @@ if __name__ == "__main__":
     root = tk.Tk()
     Connect10(root)
     root.mainloop()
+
+
